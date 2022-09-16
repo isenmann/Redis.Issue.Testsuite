@@ -1,4 +1,6 @@
 ﻿using System.Diagnostics;
+using System.Net.Sockets;
+using StackExchange.Redis;
 
 namespace Redis.Docker.Web;
 
@@ -8,11 +10,15 @@ public class TestSuite
     private readonly int _numKeys;
     private readonly Random _random = new();
     private readonly List<string> _keys = new();
-
     private readonly List<string> _values = new()
     {
         @"[{""index"":0,""guid"":""b6127d45-f55f-43c7-bb9a-af0873e25809"",""isActive"":true,""name"":""Jasmine Owens"",""company"":""MINGA"",""phone"":""+1 (898) 469-3816"",""address"":""536 Glendale Court, Boykin, American Samoa, 8427"",""registered"":""2015-02-15T02:49:33 -01:00"",""latitude"":86.480106,""longitude"":-18.782087},{""index"":1,""guid"":""d563da81-8889-4283-a7dc-d95c27df28c5"",""isActive"":true,""name"":""Marianne Cross"",""company"":""EGYPTO"",""phone"":""+1 (981) 424-2405"",""address"":""372 Fleet Place, Venice, South Carolina, 3387"",""registered"":""2017-09-05T07:29:26 -02:00"",""latitude"":29.198647,""longitude"":5.012781},{""index"":2,""guid"":""22ea0843-f669-4007-83cd-fa5ad64f3698"",""isActive"":false,""name"":""Odessa Dennis"",""company"":""KRAGGLE"",""phone"":""+1 (800) 460-2250"",""address"":""310 Calyer Street, Madrid, North Carolina, 4627"",""registered"":""2018-06-25T11:44:31 -02:00"",""latitude"":61.039205,""longitude"":-38.654186},{""index"":3,""guid"":""99f4c070-8478-44aa-a246-1b8013036b37"",""isActive"":true,""name"":""Santos Griffin"",""company"":""BEDLAM"",""phone"":""+1 (821) 457-2136"",""address"":""807 Crystal Street, Albany, Idaho, 1688"",""registered"":""2017-07-09T02:53:30 -02:00"",""latitude"":88.173174,""longitude"":29.956758},{""index"":4,""guid"":""5e4efc71-259f-4d36-a345-b459636d257c"",""isActive"":true,""name"":""Mattie Burris"",""company"":""CUJO"",""phone"":""+1 (995) 535-2027"",""address"":""513 Devon Avenue, Chilton, Palau, 486"",""registered"":""2021-10-17T10:51:17 -02:00"",""latitude"":-79.157764,""longitude"":32.322699}]"
     };
+
+    private readonly RedisValue[] _redisValues;
+    private readonly RedisKey[] _redisKeys;
+    private readonly Dictionary<int, RedisValue[]> _bucketsValues;
+    private readonly Dictionary<int, RedisKey[]> _bucketsKeys;
 
     public TestSuite(RedisClient redisClient, int numKeys)
     {
@@ -22,6 +28,29 @@ public class TestSuite
         for (var i = 0; i < numKeys; i++)
         {
             _keys.Add("value_" + i+1);
+        }
+
+        _redisValues = _keys.Select(k => new RedisValue(k)).ToArray();
+        _redisKeys = _keys.Select(k => new RedisKey(k)).ToArray();
+
+        _bucketsValues = new Dictionary<int, RedisValue[]>();
+        for (var i = 0; i < _keys.Count / 1000; i++)
+        {
+            if (!_bucketsValues.ContainsKey(i))
+            {
+                _bucketsValues.Add(i, new RedisValue[1000]);
+                _bucketsValues[i] = _redisValues.Skip(i * 1000).Take(1000).ToArray();
+            }
+        }
+
+        _bucketsKeys = new Dictionary<int, RedisKey[]>();
+        for (var i = 0; i < _keys.Count / 1000; i++)
+        {
+            if (!_bucketsKeys.ContainsKey(i))
+            {
+                _bucketsKeys.Add(i, new RedisKey[1000]);
+                _bucketsKeys[i] = _redisKeys.Skip(i * 1000).Take(1000).ToArray();
+            }
         }
     }
 
@@ -60,7 +89,6 @@ public class TestSuite
     private async Task Lock(string key)
     {
         var stopwatch = new Stopwatch();
-
         while (true)
         {
             stopwatch.Restart();
@@ -79,7 +107,6 @@ public class TestSuite
                         Console.WriteLine(e.Message);
                     }
                 });
-            stopwatch.Stop();
             Console.WriteLine($"    Lock |  Key: {key} | {stopwatch.ElapsedMilliseconds} ms");
         }
     }
@@ -132,7 +159,7 @@ public class TestSuite
             try
             {
                 stopwatch.Restart();
-                await _redisClient.AddToKeySetAsync(keySet, _keys);
+                await _redisClient.AddToKeySetAsync(keySet, _redisValues);
                 stopwatch.Stop();
                 Console.WriteLine($" AddKeys | Keys: {_keys.Count} | {stopwatch.ElapsedMilliseconds} ms");
             }
@@ -153,10 +180,10 @@ public class TestSuite
                 stopwatch.Restart();
                 var keys = await _redisClient.FindKeysAsync(keySet);
                 stopwatch.Stop();
-                Console.WriteLine($"FindKeys | Keys: {keys.Count} | {stopwatch.ElapsedMilliseconds} ms");
+                Console.WriteLine($"FindKeys | Keys: {keys.Length} | {stopwatch.ElapsedMilliseconds} ms");
                 stopwatch.Restart();
-                await _redisClient.GetAsync(keys);
-                Console.WriteLine($" GetKeys | Keys: {keys.Count} | {stopwatch.ElapsedMilliseconds} ms");
+                await _redisClient.GetAsync(_redisKeys);
+                Console.WriteLine($" GetKeys | Keys: {_redisKeys.Length} | {stopwatch.ElapsedMilliseconds} ms");
                 stopwatch.Stop();
             }
             catch (Exception e)
@@ -168,33 +195,20 @@ public class TestSuite
 
     private async Task AddToKeySetWithBuckets(string keySet)
     {
-        var buckets = new Dictionary<int, List<string>>();
-        for (var i = 0; i < _keys.Count; i++)
-        {
-            var bucket = i / 1000;
-            if (buckets.ContainsKey(bucket))
-            {
-                buckets[bucket].Add(i.ToString());
-            }
-            else
-            {
-                buckets.Add(bucket, new List<string>());
-                buckets[bucket].Add(i.ToString());
-            }
-        }
-
         while (true)
         {
             try
             {
-                await Parallel.ForEachAsync(buckets, new ParallelOptions { MaxDegreeOfParallelism = 10 }, async (bucket, _) =>
-                {
-                    var stopwatch = new Stopwatch();
-                    stopwatch.Restart();
-                    await _redisClient.AddToKeySetAsync($"{keySet}_{bucket.Key}", bucket.Value);
-                    stopwatch.Stop();
-                    Console.WriteLine($" AddKeys | Keys: {bucket.Value.Count} | {stopwatch.ElapsedMilliseconds} ms");
-                });
+                await Parallel.ForEachAsync(_bucketsValues, new ParallelOptions { MaxDegreeOfParallelism = 10 },
+                    async (bucket, _) =>
+                    {
+                        var stopwatch = new Stopwatch();
+                        stopwatch.Restart();
+                        await _redisClient.AddToKeySetAsync($"{keySet}_{bucket.Key}", bucket.Value);
+                        stopwatch.Stop();
+                        Console.WriteLine(
+                            $" AddKeys | Keys: {bucket.Value.Length} | {stopwatch.ElapsedMilliseconds} ms");
+                    });
             }
             catch (Exception e)
             {
@@ -205,32 +219,24 @@ public class TestSuite
 
     private async Task GetFromKeySetWithBuckets(string keySet)
     {
-        var buckets = new List<string>();
-        for (var i = 0; i < _keys.Count; i++)
-        {
-            var bucket = i / 1000;
-            if (!buckets.Contains(bucket.ToString()))
-            {
-                buckets.Add(bucket.ToString());
-            }
-        }
-
         var stopwatch = new Stopwatch();
         while (true)
         {
             try
             {
-                await Parallel.ForEachAsync(buckets, new ParallelOptions{MaxDegreeOfParallelism = 10 }, async (bucket, _) =>
-                {
-                    stopwatch.Restart();
-                    var keys = await _redisClient.FindKeysAsync($"{keySet}_{bucket}");
-                    stopwatch.Stop();
-                    Console.WriteLine($"FindKeys | Keys: {keys.Count} | {stopwatch.ElapsedMilliseconds} ms");
-                    stopwatch.Restart();
-                    await _redisClient.GetAsync(keys);
-                    Console.WriteLine($" GetKeys | Keys: {keys.Count} | {stopwatch.ElapsedMilliseconds} ms");
-                    stopwatch.Stop();
-                });
+                await Parallel.ForEachAsync(_bucketsKeys, new ParallelOptions { MaxDegreeOfParallelism = 10 },
+                    async (bucket, _) =>
+                    {
+                        stopwatch.Restart();
+                        var keys = await _redisClient.FindKeysAsync($"{keySet}_{bucket.Key}");
+                        stopwatch.Stop();
+                        Console.WriteLine($"FindKeys | Keys: {keys.Length} | {stopwatch.ElapsedMilliseconds} ms");
+                        stopwatch.Restart();
+                        await _redisClient.GetAsync(bucket.Value);
+                        Console.WriteLine($" GetKeys | Keys: {bucket.Value.Length} | {stopwatch.ElapsedMilliseconds} ms");
+                        stopwatch.Stop();
+                    });
+
             }
             catch (Exception e)
             {

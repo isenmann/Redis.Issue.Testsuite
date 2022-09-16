@@ -6,15 +6,16 @@ namespace Redis.Docker.Web;
 
 public class RedisClient
 {
-    private readonly ConnectionMultiplexer _connectionMultiplexer;
     private readonly RedLockFactory _redisLockFactory;
+    private readonly IDatabase _redisDatabase;
 
     public RedisClient(string connectionString)
     {
-        _connectionMultiplexer = ConnectionMultiplexer.Connect(connectionString);
+        var connectionMultiplexer = ConnectionMultiplexer.Connect(connectionString);
+        _redisDatabase = connectionMultiplexer.GetDatabase();
         var multiplexers = new List<RedLockMultiplexer>
         {
-            _connectionMultiplexer
+            connectionMultiplexer
         };
         _redisLockFactory = RedLockFactory.Create(multiplexers);
     }
@@ -33,36 +34,29 @@ public class RedisClient
         return true;
     }
 
-    public async Task<string> GetAsync(string key)
+    public async Task<string> GetAsync(RedisKey key)
     {
-        var db = _connectionMultiplexer.GetDatabase();
-        var value = await db.StringGetAsync(key);
+        var value = await _redisDatabase.StringGetAsync(key);
         return value.HasValue ? value.ToString() : string.Empty;
     }
 
     public async Task SetAsync(string key, string value, TimeSpan? absoluteExpiration)
     {
-        var db = _connectionMultiplexer.GetDatabase();
-        await db.StringSetAsync(key, value, absoluteExpiration);
+        await _redisDatabase.StringSetAsync(key, value, absoluteExpiration);
     }
 
-    public async Task AddToKeySetAsync(string keyListKey, List<string> keys)
+    public async Task AddToKeySetAsync(string keyListKey, RedisValue[] keys)
     {
-        var db = _connectionMultiplexer.GetDatabase();
-        await db.SetAddAsync(keyListKey, keys.Select(k => new RedisValue(k)).ToArray());
+        await _redisDatabase.SetAddAsync(keyListKey, keys);
     }
 
-    public async Task<List<string>> FindKeysAsync(string keyListKey)
+    public async Task<RedisValue[]> FindKeysAsync(string keyListKey)
     {
-        var db = _connectionMultiplexer.GetDatabase();
-        var keys = await db.SetMembersAsync(keyListKey);
-        return keys.Select(x => x.ToString()).ToList();
+        return await _redisDatabase.SetMembersAsync(keyListKey);
     }
 
-    public async Task<List<string>> GetAsync(List<string> keys)
+    public async Task<RedisValue[]> GetAsync(RedisKey[] keys)
     {
-        var db = _connectionMultiplexer.GetDatabase();
-        var values = await db.StringGetAsync(keys.Select(x => new RedisKey(x)).ToArray());
-        return values.Select(x => x.ToString()).ToList();
+        return await _redisDatabase.StringGetAsync(keys);
     }
 }
