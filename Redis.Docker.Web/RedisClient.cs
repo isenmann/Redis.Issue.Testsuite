@@ -11,7 +11,7 @@ public class RedisClient
 
     public RedisClient(string connectionString)
     {
-        var connectionMultiplexer = ConnectionMultiplexer.Connect(connectionString);
+        var connectionMultiplexer = ConnectionMultiplexer.Connect(connectionString, options => options.SocketManager = SocketManager.ThreadPool);
         _redisDatabase = connectionMultiplexer.GetDatabase();
         var multiplexers = new List<RedLockMultiplexer>
         {

@@ -6,7 +6,7 @@ ThreadPool.GetMinThreads(out var workerThreads, out var completionPortThreads);
 
 Console.WriteLine($"Worker Threads = {workerThreads} - Completion Port Threads = {completionPortThreads}");
 
-//ThreadPool.SetMinThreads(500, completionPortThreads);
+ThreadPool.SetMinThreads(workerThreads * 10, completionPortThreads);
 
 ThreadPool.GetMinThreads(out workerThreads, out completionPortThreads);
 
